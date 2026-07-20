@@ -1,0 +1,795 @@
+{
+  "version": 1,
+  "sheets": [
+    {
+      "name": "Sheet1",
+      "cells": [
+        {
+          "r": 0,
+          "c": 0,
+          "raw": "Quarter",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 1,
+          "raw": "Revenue",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 2,
+          "raw": "Costs",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 3,
+          "raw": "Gross Profit",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 4,
+          "raw": "Margin %",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 5,
+          "raw": "YoY Growth",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 0,
+          "raw": "Q1 2023",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 1,
+          "raw": "842000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 2,
+          "raw": "511000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 0,
+          "raw": "Q2 2023",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 1,
+          "raw": "967000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 2,
+          "raw": "548000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 0,
+          "raw": "Q3 2023",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 1,
+          "raw": "1124000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 2,
+          "raw": "612000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 0,
+          "raw": "Q4 2023",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 1,
+          "raw": "1388000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 2,
+          "raw": "699000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 0,
+          "raw": "Q1 2024",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 1,
+          "raw": "1042000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 2,
+          "raw": "571000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 0,
+          "raw": "Q2 2024",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 1,
+          "raw": "1213000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 2,
+          "raw": "631000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 0,
+          "raw": "Q3 2024",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 1,
+          "raw": "1419000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 2,
+          "raw": "718000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 8,
+          "c": 0,
+          "raw": "Q4 2024",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 8,
+          "c": 1,
+          "raw": "1776000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 8,
+          "c": 2,
+          "raw": "872000",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 3,
+          "raw": "=B2-C2",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 4,
+          "raw": "=ROUND(D2/B2*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 3,
+          "raw": "=B3-C3",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 4,
+          "raw": "=ROUND(D3/B3*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 3,
+          "raw": "=B4-C4",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 4,
+          "raw": "=ROUND(D4/B4*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 3,
+          "raw": "=B5-C5",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 4,
+          "raw": "=ROUND(D5/B5*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 3,
+          "raw": "=B6-C6",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 4,
+          "raw": "=ROUND(D6/B6*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 3,
+          "raw": "=B7-C7",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 4,
+          "raw": "=ROUND(D7/B7*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 3,
+          "raw": "=B8-C8",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 4,
+          "raw": "=ROUND(D8/B8*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 8,
+          "c": 3,
+          "raw": "=B9-C9",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 8,
+          "c": 4,
+          "raw": "=ROUND(D9/B9*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 5,
+          "raw": "=ROUND((B6-B2)/B2*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 5,
+          "raw": "=ROUND((B7-B3)/B3*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 5,
+          "raw": "=ROUND((B8-B4)/B4*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 8,
+          "c": 5,
+          "raw": "=ROUND((B9-B5)/B5*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 10,
+          "c": 0,
+          "raw": "TOTAL 2023",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 10,
+          "c": 1,
+          "raw": "=SUM(B2:B5)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 10,
+          "c": 2,
+          "raw": "=SUM(C2:C5)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 10,
+          "c": 3,
+          "raw": "=SUM(D2:D5)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 10,
+          "c": 4,
+          "raw": "=ROUND(D11/B11*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 11,
+          "c": 0,
+          "raw": "TOTAL 2024",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 11,
+          "c": 1,
+          "raw": "=SUM(B6:B9)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 11,
+          "c": 2,
+          "raw": "=SUM(C6:C9)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 11,
+          "c": 3,
+          "raw": "=SUM(D6:D9)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 11,
+          "c": 4,
+          "raw": "=ROUND(D12/B12*100,1)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 12,
+          "c": 0,
+          "raw": "YoY GROWTH",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 12,
+          "c": 1,
+          "raw": "=ROUND((B12-B11)/B11*100,1)",
+          "style": {},
+          "format": "general"
+        }
+      ]
+    },
+    {
+      "name": "Metrics",
+      "cells": [
+        {
+          "r": 0,
+          "c": 0,
+          "raw": "Metric",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 1,
+          "raw": "Value",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 2,
+          "raw": "Source",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 0,
+          "raw": "Total 2023 Revenue",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 1,
+          "raw": "=Sheet1!B11",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 0,
+          "raw": "Total 2024 Revenue",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 1,
+          "raw": "=Sheet1!B12",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 0,
+          "raw": "Revenue Growth %",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 1,
+          "raw": "=Sheet1!B13",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 0,
+          "raw": "Avg Quarterly Margin",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 1,
+          "raw": "=AVERAGE(Sheet1!E2:E9)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 0,
+          "raw": "Best Quarter Revenue",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 1,
+          "raw": "=MAX(Sheet1!B2:B9)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 0,
+          "raw": "Best Quarter Margin",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 1,
+          "raw": "=MAX(Sheet1!E2:E9)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 6,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 0,
+          "raw": "Total Headcount Cost",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 1,
+          "raw": "=Sheet1!C11+Sheet1!C12",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 7,
+          "c": 2,
+          "raw": "Sheet1",
+          "style": {},
+          "format": "general"
+        }
+      ]
+    },
+    {
+      "name": "Forecast",
+      "cells": [
+        {
+          "r": 0,
+          "c": 0,
+          "raw": "Quarter",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 1,
+          "raw": "Forecast",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 2,
+          "raw": "Low (-10%)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 0,
+          "c": 3,
+          "raw": "High (+10%)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 0,
+          "raw": "Q1 2025",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 1,
+          "raw": "=ROUND(Sheet1!B6*(1+Metrics!B4/100),0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 2,
+          "raw": "=ROUND(B2*0.9,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 1,
+          "c": 3,
+          "raw": "=ROUND(B2*1.1,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 0,
+          "raw": "Q2 2025",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 1,
+          "raw": "=ROUND(Sheet1!B7*(1+Metrics!B4/100),0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 2,
+          "raw": "=ROUND(B3*0.9,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 2,
+          "c": 3,
+          "raw": "=ROUND(B3*1.1,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 0,
+          "raw": "Q3 2025",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 1,
+          "raw": "=ROUND(Sheet1!B8*(1+Metrics!B4/100),0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 2,
+          "raw": "=ROUND(B4*0.9,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 3,
+          "c": 3,
+          "raw": "=ROUND(B4*1.1,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 0,
+          "raw": "Q4 2025",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 1,
+          "raw": "=ROUND(Sheet1!B9*(1+Metrics!B4/100),0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 2,
+          "raw": "=ROUND(B5*0.9,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 4,
+          "c": 3,
+          "raw": "=ROUND(B5*1.1,0)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 0,
+          "raw": "TOTAL 2025",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 1,
+          "raw": "=SUM(B2:B5)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 2,
+          "raw": "=SUM(C2:C5)",
+          "style": {},
+          "format": "general"
+        },
+        {
+          "r": 5,
+          "c": 3,
+          "raw": "=SUM(D2:D5)",
+          "style": {},
+          "format": "general"
+        }
+      ]
+    }
+  ],
+  "sheet_order": [
+    "Sheet1",
+    "Metrics",
+    "Forecast"
+  ]
+}
