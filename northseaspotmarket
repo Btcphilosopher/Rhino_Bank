@@ -1,0 +1,1264 @@
+"""
+============================================================
+RHINO NORTH SEA FISH EXCHANGE
+Physical Spot Market Engine
+============================================================
+
+Purpose:
+    Institutional spot-market software for physical fish
+    landed in the North Sea.
+
+Core capabilities:
+    - Fish lot registration
+    - Quality-adjusted spot pricing
+    - Species-specific benchmarks
+    - Live bid/ask order books
+    - Price/time matching
+    - Physical inventory
+    - Freshness decay
+    - Market snapshots
+    - Trade execution
+    - Settlement records
+
+This is a market-engine prototype.
+Production deployment would require regulatory,
+traceability, fisheries-management and exchange controls.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
+from enum import Enum
+from heapq import heappop, heappush
+from typing import Dict, List, Optional
+from uuid import uuid4
+
+
+# ============================================================
+# NUMERIC UTILITIES
+# ============================================================
+
+PRICE_QUANTUM = Decimal("0.01")
+WEIGHT_QUANTUM = Decimal("0.001")
+
+
+def money(value) -> Decimal:
+    return Decimal(str(value)).quantize(
+        PRICE_QUANTUM,
+        rounding=ROUND_HALF_UP
+    )
+
+
+def weight(value) -> Decimal:
+    return Decimal(str(value)).quantize(
+        WEIGHT_QUANTUM,
+        rounding=ROUND_HALF_UP
+    )
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ============================================================
+# ENUMS
+# ============================================================
+
+class Species(str, Enum):
+
+    COD = "COD"
+    HADDOCK = "HADDOCK"
+    PLAICE = "PLAICE"
+    SOLE = "SOLE"
+    HERRING = "HERRING"
+    MACKEREL = "MACKEREL"
+    SPRAT = "SPRAT"
+    WHITING = "WHITING"
+    SAITHE = "SAITHE"
+
+
+class FreshnessGrade(str, Enum):
+
+    EXTRA = "EXTRA"
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class Side(str, Enum):
+
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderType(str, Enum):
+
+    LIMIT = "LIMIT"
+    MARKET = "MARKET"
+
+
+class OrderStatus(str, Enum):
+
+    OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+
+
+# ============================================================
+# FISH LOT
+# ============================================================
+
+@dataclass
+class FishLot:
+
+    lot_id: str
+
+    species: Species
+
+    origin_port: str
+    fishing_area: str
+
+    vessel_id: str
+
+    landed_at: datetime
+
+    weight_kg: Decimal
+
+    average_size_kg: Decimal
+
+    freshness_grade: FreshnessGrade
+
+    temperature_c: Decimal
+
+    certification: str = "STANDARD"
+
+    storage_location: Optional[str] = None
+
+    available_kg: Decimal = field(init=False)
+
+    def __post_init__(self):
+
+        self.weight_kg = weight(self.weight_kg)
+        self.available_kg = self.weight_kg
+
+    # --------------------------------------------------------
+    # AGE
+    # --------------------------------------------------------
+
+    def age_hours(self) -> Decimal:
+
+        seconds = (
+            utc_now() - self.landed_at
+        ).total_seconds()
+
+        return Decimal(str(max(seconds, 0))) / Decimal("3600")
+
+    # --------------------------------------------------------
+    # FRESHNESS FACTOR
+    # --------------------------------------------------------
+
+    def freshness_factor(self) -> Decimal:
+
+        age = self.age_hours()
+
+        if self.freshness_grade == FreshnessGrade.EXTRA:
+            decay_rate = Decimal("0.012")
+
+        elif self.freshness_grade == FreshnessGrade.A:
+            decay_rate = Decimal("0.018")
+
+        elif self.freshness_grade == FreshnessGrade.B:
+            decay_rate = Decimal("0.025")
+
+        else:
+            decay_rate = Decimal("0.035")
+
+        factor = Decimal("1") - (
+            age * decay_rate
+        )
+
+        return max(
+            Decimal("0.50"),
+            factor
+        )
+
+
+# ============================================================
+# SPECIES BENCHMARK
+# ============================================================
+
+@dataclass
+class SpeciesBenchmark:
+
+    species: Species
+
+    price_per_kg: Decimal
+
+    currency: str = "GBP"
+
+    timestamp: datetime = field(
+        default_factory=utc_now
+    )
+
+    def update(self, new_price):
+
+        self.price_per_kg = money(new_price)
+
+        self.timestamp = utc_now()
+
+
+# ============================================================
+# SPOT PRICING ENGINE
+# ============================================================
+
+class FishSpotPricingEngine:
+
+    """
+    Rhino's theoretical physical spot pricing engine.
+
+    Starting price:
+
+        benchmark
+          × size adjustment
+          × freshness adjustment
+          × temperature adjustment
+          × certification adjustment
+
+    A production model could replace this with a
+    statistical/ML model trained against actual
+    auction and wholesale transactions.
+    """
+
+    def __init__(
+        self,
+        benchmarks: Dict[Species, SpeciesBenchmark]
+    ):
+
+        self.benchmarks = benchmarks
+
+    # --------------------------------------------------------
+    # SIZE ADJUSTMENT
+    # --------------------------------------------------------
+
+    def size_adjustment(
+        self,
+        lot: FishLot
+    ) -> Decimal:
+
+        size = lot.average_size_kg
+
+        if lot.species == Species.COD:
+
+            if size >= Decimal("5"):
+                return Decimal("1.25")
+
+            if size >= Decimal("3"):
+                return Decimal("1.12")
+
+            if size >= Decimal("2"):
+                return Decimal("1.00")
+
+            return Decimal("0.88")
+
+        if lot.species == Species.HADDOCK:
+
+            if size >= Decimal("1.5"):
+                return Decimal("1.15")
+
+            if size >= Decimal("1"):
+                return Decimal("1.00")
+
+            return Decimal("0.90")
+
+        return Decimal("1.00")
+
+    # --------------------------------------------------------
+    # TEMPERATURE ADJUSTMENT
+    # --------------------------------------------------------
+
+    def temperature_adjustment(
+        self,
+        lot: FishLot
+    ) -> Decimal:
+
+        temp = lot.temperature_c
+
+        if temp <= Decimal("1"):
+            return Decimal("1.05")
+
+        if temp <= Decimal("3"):
+            return Decimal("1.00")
+
+        if temp <= Decimal("5"):
+            return Decimal("0.95")
+
+        return Decimal("0.85")
+
+    # --------------------------------------------------------
+    # CERTIFICATION
+    # --------------------------------------------------------
+
+    def certification_adjustment(
+        self,
+        lot: FishLot
+    ) -> Decimal:
+
+        premiums = {
+
+            "MSC": Decimal("1.08"),
+            "ASC": Decimal("1.05"),
+            "ORGANIC": Decimal("1.10"),
+            "STANDARD": Decimal("1.00")
+
+        }
+
+        return premiums.get(
+            lot.certification.upper(),
+            Decimal("1.00")
+        )
+
+    # --------------------------------------------------------
+    # SPOT PRICE
+    # --------------------------------------------------------
+
+    def spot_price(
+        self,
+        lot: FishLot
+    ) -> Decimal:
+
+        benchmark = self.benchmarks[
+            lot.species
+        ].price_per_kg
+
+        price = (
+            benchmark
+            * self.size_adjustment(lot)
+            * lot.freshness_factor()
+            * self.temperature_adjustment(lot)
+            * self.certification_adjustment(lot)
+        )
+
+        return money(
+            max(price, Decimal("0.01"))
+        )
+
+
+# ============================================================
+# ORDER
+# ============================================================
+
+@dataclass(order=True)
+class Order:
+
+    sort_index: tuple = field(
+        init=False,
+        repr=False
+    )
+
+    order_id: str
+
+    trader_id: str
+
+    lot_id: str
+
+    side: Side
+
+    order_type: OrderType
+
+    price: Optional[Decimal]
+
+    quantity_kg: Decimal
+
+    remaining_kg: Decimal
+
+    timestamp: datetime = field(
+        default_factory=utc_now
+    )
+
+    status: OrderStatus = OrderStatus.OPEN
+
+    def __post_init__(self):
+
+        if self.side == Side.BUY:
+
+            self.sort_index = (
+                -self.price
+                if self.price is not None
+                else Decimal("0"),
+
+                self.timestamp.timestamp()
+            )
+
+        else:
+
+            self.sort_index = (
+                self.price
+                if self.price is not None
+                else Decimal("0"),
+
+                self.timestamp.timestamp()
+            )
+
+
+# ============================================================
+# TRADE
+# ============================================================
+
+@dataclass
+class FishTrade:
+
+    trade_id: str
+
+    lot_id: str
+
+    buyer_id: str
+
+    seller_id: str
+
+    species: Species
+
+    price_per_kg: Decimal
+
+    quantity_kg: Decimal
+
+    timestamp: datetime = field(
+        default_factory=utc_now
+    )
+
+    @property
+    def notional(self) -> Decimal:
+
+        return money(
+            self.price_per_kg
+            * self.quantity_kg
+        )
+
+
+# ============================================================
+# ORDER BOOK
+# ============================================================
+
+class FishOrderBook:
+
+    def __init__(
+        self,
+        lot_id: str
+    ):
+
+        self.lot_id = lot_id
+
+        self.bids: List[Order] = []
+        self.asks: List[Order] = []
+
+        self.orders: Dict[str, Order] = {}
+
+        self.trades: List[FishTrade] = []
+
+    # --------------------------------------------------------
+    # ADD
+    # --------------------------------------------------------
+
+    def add_order(
+        self,
+        order: Order
+    ):
+
+        if order.lot_id != self.lot_id:
+            raise ValueError(
+                "Wrong lot for order book"
+            )
+
+        self.orders[
+            order.order_id
+        ] = order
+
+        if order.side == Side.BUY:
+
+            heappush(
+                self.bids,
+                order
+            )
+
+        else:
+
+            heappush(
+                self.asks,
+                order
+            )
+
+    # --------------------------------------------------------
+    # BEST BID
+    # --------------------------------------------------------
+
+    def best_bid(self):
+
+        while self.bids:
+
+            order = self.bids[0]
+
+            if order.status in (
+                OrderStatus.FILLED,
+                OrderStatus.CANCELLED
+            ):
+
+                heappop(self.bids)
+                continue
+
+            return order
+
+        return None
+
+    # --------------------------------------------------------
+    # BEST ASK
+    # --------------------------------------------------------
+
+    def best_ask(self):
+
+        while self.asks:
+
+            order = self.asks[0]
+
+            if order.status in (
+                OrderStatus.FILLED,
+                OrderStatus.CANCELLED
+            ):
+
+                heappop(self.asks)
+                continue
+
+            return order
+
+        return None
+
+    # --------------------------------------------------------
+    # MATCH
+    # --------------------------------------------------------
+
+    def match(
+        self,
+        species: Species
+    ) -> List[FishTrade]:
+
+        trades = []
+
+        while True:
+
+            bid = self.best_bid()
+            ask = self.best_ask()
+
+            if not bid or not ask:
+                break
+
+            bid_crosses = (
+                bid.order_type == OrderType.MARKET
+                or bid.price >= ask.price
+            )
+
+            ask_crosses = (
+                ask.order_type == OrderType.MARKET
+                or ask.price <= bid.price
+            )
+
+            if not (
+                bid_crosses
+                and ask_crosses
+            ):
+                break
+
+            quantity_traded = min(
+                bid.remaining_kg,
+                ask.remaining_kg
+            )
+
+            # Passive order sets execution price.
+            if bid.timestamp <= ask.timestamp:
+
+                execution_price = (
+                    ask.price
+                    if ask.price is not None
+                    else bid.price
+                )
+
+            else:
+
+                execution_price = (
+                    bid.price
+                    if bid.price is not None
+                    else ask.price
+                )
+
+            if execution_price is None:
+                raise ValueError(
+                    "Trade has no executable price"
+                )
+
+            trade = FishTrade(
+
+                trade_id=str(uuid4()),
+
+                lot_id=self.lot_id,
+
+                buyer_id=bid.trader_id,
+
+                seller_id=ask.trader_id,
+
+                species=species,
+
+                price_per_kg=money(
+                    execution_price
+                ),
+
+                quantity_kg=weight(
+                    quantity_traded
+                )
+            )
+
+            trades.append(trade)
+
+            self.trades.append(trade)
+
+            bid.remaining_kg -= quantity_traded
+            ask.remaining_kg -= quantity_traded
+
+            self.update_status(bid)
+            self.update_status(ask)
+
+        return trades
+
+    # --------------------------------------------------------
+    # STATUS
+    # --------------------------------------------------------
+
+    @staticmethod
+    def update_status(
+        order: Order
+    ):
+
+        if order.remaining_kg <= 0:
+
+            order.remaining_kg = Decimal("0")
+
+            order.status = (
+                OrderStatus.FILLED
+            )
+
+        elif (
+            order.remaining_kg
+            < order.quantity_kg
+        ):
+
+            order.status = (
+                OrderStatus.PARTIALLY_FILLED
+            )
+
+        else:
+
+            order.status = (
+                OrderStatus.OPEN
+            )
+
+    # --------------------------------------------------------
+    # CANCEL
+    # --------------------------------------------------------
+
+    def cancel(
+        self,
+        order_id: str
+    ):
+
+        if order_id not in self.orders:
+            raise KeyError(
+                "Unknown order"
+            )
+
+        order = self.orders[
+            order_id
+        ]
+
+        if order.status == OrderStatus.FILLED:
+
+            raise ValueError(
+                "Cannot cancel filled order"
+            )
+
+        order.status = (
+            OrderStatus.CANCELLED
+        )
+
+
+# ============================================================
+# PHYSICAL INVENTORY
+# ============================================================
+
+@dataclass
+class InventoryPosition:
+
+    lot_id: str
+
+    owner_id: str
+
+    quantity_kg: Decimal
+
+    location: str
+
+    received_at: datetime = field(
+        default_factory=utc_now
+    )
+
+
+class PhysicalInventory:
+
+    def __init__(self):
+
+        self.positions: Dict[
+            str,
+            InventoryPosition
+        ] = {}
+
+    def add(
+        self,
+        position: InventoryPosition
+    ):
+
+        self.positions[
+            position.lot_id
+        ] = position
+
+    def transfer(
+        self,
+        lot_id: str,
+        new_owner: str,
+        quantity_kg: Decimal
+    ):
+
+        if lot_id not in self.positions:
+            raise KeyError(
+                "Inventory lot not found"
+            )
+
+        position = self.positions[
+            lot_id
+        ]
+
+        if quantity_kg > position.quantity_kg:
+            raise ValueError(
+                "Insufficient physical inventory"
+            )
+
+        position.owner_id = new_owner
+
+        position.quantity_kg -= quantity_kg
+
+
+# ============================================================
+# RHINO NORTH SEA EXCHANGE
+# ============================================================
+
+class RhinoNorthSeaFishExchange:
+
+    def __init__(self):
+
+        self.lots: Dict[
+            str,
+            FishLot
+        ] = {}
+
+        self.books: Dict[
+            str,
+            FishOrderBook
+        ] = {}
+
+        self.trades: List[
+            FishTrade
+        ] = []
+
+        self.inventory = (
+            PhysicalInventory()
+        )
+
+        self.benchmarks = {
+
+            Species.COD:
+                SpeciesBenchmark(
+                    Species.COD,
+                    Decimal("6.80")
+                ),
+
+            Species.HADDOCK:
+                SpeciesBenchmark(
+                    Species.HADDOCK,
+                    Decimal("5.20")
+                ),
+
+            Species.PLAICE:
+                SpeciesBenchmark(
+                    Species.PLAICE,
+                    Decimal("4.60")
+                ),
+
+            Species.SOLE:
+                SpeciesBenchmark(
+                    Species.SOLE,
+                    Decimal("8.50")
+                ),
+
+            Species.HERRING:
+                SpeciesBenchmark(
+                    Species.HERRING,
+                    Decimal("2.20")
+                ),
+
+            Species.MACKEREL:
+                SpeciesBenchmark(
+                    Species.MACKEREL,
+                    Decimal("2.80")
+                ),
+
+            Species.SPRAT:
+                SpeciesBenchmark(
+                    Species.SPRAT,
+                    Decimal("1.40")
+                ),
+
+            Species.WHITING:
+                SpeciesBenchmark(
+                    Species.WHITING,
+                    Decimal("2.70")
+                ),
+
+            Species.SAITHE:
+                SpeciesBenchmark(
+                    Species.SAITHE,
+                    Decimal("3.10")
+                )
+        }
+
+        self.pricing = (
+            FishSpotPricingEngine(
+                self.benchmarks
+            )
+        )
+
+    # --------------------------------------------------------
+    # REGISTER LOT
+    # --------------------------------------------------------
+
+    def register_lot(
+        self,
+        lot: FishLot
+    ):
+
+        self.lots[
+            lot.lot_id
+        ] = lot
+
+        self.books[
+            lot.lot_id
+        ] = FishOrderBook(
+            lot.lot_id
+        )
+
+        self.inventory.add(
+            InventoryPosition(
+                lot_id=lot.lot_id,
+                owner_id=lot.vessel_id,
+                quantity_kg=lot.weight_kg,
+                location=(
+                    lot.storage_location
+                    or lot.origin_port
+                )
+            )
+        )
+
+    # --------------------------------------------------------
+    # SPOT
+    # --------------------------------------------------------
+
+    def get_spot_price(
+        self,
+        lot_id: str
+    ) -> Decimal:
+
+        lot = self.lots[lot_id]
+
+        return self.pricing.spot_price(
+            lot
+        )
+
+    # --------------------------------------------------------
+    # SUBMIT ORDER
+    # --------------------------------------------------------
+
+    def submit_order(
+        self,
+        trader_id: str,
+        lot_id: str,
+        side: Side,
+        order_type: OrderType,
+        quantity_kg: Decimal,
+        price: Optional[Decimal] = None
+    ) -> Order:
+
+        lot = self.lots[lot_id]
+
+        quantity_kg = weight(
+            quantity_kg
+        )
+
+        if quantity_kg <= 0:
+            raise ValueError(
+                "Quantity must be positive"
+            )
+
+        if quantity_kg > lot.available_kg:
+            raise ValueError(
+                "Order exceeds available fish"
+            )
+
+        if (
+            order_type == OrderType.LIMIT
+            and (
+                price is None
+                or price <= 0
+            )
+        ):
+            raise ValueError(
+                "Limit order requires price"
+            )
+
+        order = Order(
+
+            order_id=str(uuid4()),
+
+            trader_id=trader_id,
+
+            lot_id=lot_id,
+
+            side=side,
+
+            order_type=order_type,
+
+            price=(
+                money(price)
+                if price is not None
+                else None
+            ),
+
+            quantity_kg=quantity_kg,
+
+            remaining_kg=quantity_kg
+        )
+
+        self.books[
+            lot_id
+        ].add_order(order)
+
+        new_trades = (
+            self.books[
+                lot_id
+            ].match(
+                lot.species
+            )
+        )
+
+        for trade in new_trades:
+
+            self.execute_physical_settlement(
+                trade
+            )
+
+        self.trades.extend(
+            new_trades
+        )
+
+        return order
+
+    # --------------------------------------------------------
+    # PHYSICAL SETTLEMENT
+    # --------------------------------------------------------
+
+    def execute_physical_settlement(
+        self,
+        trade: FishTrade
+    ):
+
+        lot = self.lots[
+            trade.lot_id
+        ]
+
+        if (
+            trade.quantity_kg
+            > lot.available_kg
+        ):
+            raise ValueError(
+                "Insufficient fish for settlement"
+            )
+
+        lot.available_kg -= (
+            trade.quantity_kg
+        )
+
+        self.inventory.transfer(
+            lot_id=trade.lot_id,
+            new_owner=trade.buyer_id,
+            quantity_kg=trade.quantity_kg
+        )
+
+    # --------------------------------------------------------
+    # MARKET SNAPSHOT
+    # --------------------------------------------------------
+
+    def market_snapshot(
+        self,
+        lot_id: str
+    ) -> dict:
+
+        lot = self.lots[
+            lot_id
+        ]
+
+        book = self.books[
+            lot_id
+        ]
+
+        bid = book.best_bid()
+        ask = book.best_ask()
+
+        last_trade = (
+            book.trades[-1]
+            if book.trades
+            else None
+        )
+
+        return {
+
+            "lot_id":
+                lot_id,
+
+            "species":
+                lot.species.value,
+
+            "origin":
+                lot.origin_port,
+
+            "fishing_area":
+                lot.fishing_area,
+
+            "spot_price_gbp_kg":
+                str(
+                    self.get_spot_price(
+                        lot_id
+                    )
+                ),
+
+            "best_bid":
+                (
+                    str(bid.price)
+                    if bid
+                    and bid.price
+                    else None
+                ),
+
+            "best_ask":
+                (
+                    str(ask.price)
+                    if ask
+                    and ask.price
+                    else None
+                ),
+
+            "last_trade":
+                (
+                    str(
+                        last_trade.price_per_kg
+                    )
+                    if last_trade
+                    else None
+                ),
+
+            "available_kg":
+                str(
+                    lot.available_kg
+                ),
+
+            "age_hours":
+                str(
+                    lot.age_hours()
+                ),
+
+            "freshness_factor":
+                str(
+                    lot.freshness_factor()
+                ),
+
+            "temperature_c":
+                str(
+                    lot.temperature_c
+                ),
+
+            "timestamp":
+                utc_now().isoformat()
+        }
+
+
+# ============================================================
+# DEMONSTRATION
+# ============================================================
+
+if __name__ == "__main__":
+
+    exchange = (
+        RhinoNorthSeaFishExchange()
+    )
+
+    # --------------------------------------------------------
+    # CREATE A NORTH SEA COD LOT
+    # --------------------------------------------------------
+
+    cod_lot = FishLot(
+
+        lot_id="NS-COD-20260901-001",
+
+        species=Species.COD,
+
+        origin_port="Peterhead",
+
+        fishing_area="North Sea",
+
+        vessel_id="VESSEL-UK-001",
+
+        landed_at=(
+            utc_now()
+            - timedelta(hours=5)
+        ),
+
+        weight_kg=Decimal("12000"),
+
+        average_size_kg=Decimal("4.2"),
+
+        freshness_grade=(
+            FreshnessGrade.EXTRA
+        ),
+
+        temperature_c=Decimal("1.2"),
+
+        certification="MSC",
+
+        storage_location="PETERHEAD-COLDSTORE-01"
+    )
+
+    exchange.register_lot(
+        cod_lot
+    )
+
+    # --------------------------------------------------------
+    # DISPLAY SPOT PRICE
+    # --------------------------------------------------------
+
+    spot = exchange.get_spot_price(
+        cod_lot.lot_id
+    )
+
+    print(
+        "\nRHINO NORTH SEA FISH EXCHANGE"
+    )
+
+    print(
+        "================================"
+    )
+
+    print(
+        "COD SPOT:",
+        spot,
+        "GBP/kg"
+    )
+
+    # --------------------------------------------------------
+    # BUYER ENTERS BID
+    # --------------------------------------------------------
+
+    exchange.submit_order(
+
+        trader_id="RHINO-SEAFOOD-001",
+
+        lot_id=cod_lot.lot_id,
+
+        side=Side.BUY,
+
+        order_type=OrderType.LIMIT,
+
+        quantity_kg=Decimal("4000"),
+
+        price=Decimal("7.65")
+    )
+
+    # --------------------------------------------------------
+    # SELLER ENTERS OFFER
+    # --------------------------------------------------------
+
+    exchange.submit_order(
+
+        trader_id="NORTHSEA-FISHER-001",
+
+        lot_id=cod_lot.lot_id,
+
+        side=Side.SELL,
+
+        order_type=OrderType.LIMIT,
+
+        quantity_kg=Decimal("3000"),
+
+        price=Decimal("7.40")
+    )
+
+    # --------------------------------------------------------
+    # MARKET DASHBOARD SNAPSHOT
+    # --------------------------------------------------------
+
+    snapshot = (
+        exchange.market_snapshot(
+            cod_lot.lot_id
+        )
+    )
+
+    print(
+        "\nMARKET SNAPSHOT"
+    )
+
+    print(
+        "----------------"
+    )
+
+    for key, value in snapshot.items():
+
+        print(
+            f"{key:25} {value}"
+        )
+
+    # --------------------------------------------------------
+    # TRADES
+    # --------------------------------------------------------
+
+    print(
+        "\nEXECUTED TRADES"
+    )
+
+    print(
+        "----------------"
+    )
+
+    for trade in exchange.trades:
+
+        print(
+            trade.species.value,
+            trade.quantity_kg,
+            "kg @",
+            trade.price_per_kg,
+            "GBP/kg",
+            "| NOTIONAL:",
+            trade.notional,
+            "GBP"
+        )
