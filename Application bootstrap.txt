@@ -1,0 +1,884 @@
+1. Application bootstrap
+# app/main.py
+
+import sys
+
+from PySide6.QtWidgets import QApplication
+
+from app.application import RhinoApplication
+
+
+def main() -> int:
+
+    qt = QApplication(sys.argv)
+
+    qt.setApplicationName("RhinoBank")
+    qt.setApplicationDisplayName("RhinoBank Institutional Terminal")
+    qt.setOrganizationName("RhinoBank")
+
+    application = RhinoApplication(qt)
+
+    application.start()
+
+    return qt.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+2. Application controller
+# app/application.py
+
+from PySide6.QtCore import QObject
+
+from app.window import RhinoMainWindow
+from core.account import AccountService
+from core.trading import TradingService
+from core.risk import RiskService
+from core.escrow import EscrowService
+from core.settlement import SettlementService
+from analytics.r_engine import REngine
+from infrastructure.health import HealthMonitor
+
+
+class RhinoApplication(QObject):
+
+    def __init__(self, qt_application):
+
+        super().__init__()
+
+        self.qt = qt_application
+
+        self.account = AccountService()
+        self.trading = TradingService()
+        self.risk = RiskService()
+        self.escrow = EscrowService()
+        self.settlement = SettlementService()
+
+        self.analytics = REngine()
+
+        self.health = HealthMonitor()
+
+        self.window = RhinoMainWindow(
+            services=self
+        )
+
+
+    def start(self):
+
+        self.health.start()
+
+        self.window.show()
+
+        self.window.status_message(
+            "RHINOBANK // TERMINAL INITIALIZED"
+        )
+
+
+    def shutdown(self):
+
+        self.health.stop()
+
+        self.analytics.shutdown()
+
+        self.trading.shutdown()
+
+        self.settlement.shutdown()
+3. Main terminal window
+# app/window.py
+
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QFrame,
+    QPushButton,
+    QStackedWidget,
+)
+
+from PySide6.QtCore import Qt
+
+from ui.dashboard import DashboardPage
+from ui.market import MarketPage
+from ui.orders import OrdersPage
+from ui.positions import PositionsPage
+from ui.analytics import AnalyticsPage
+from ui.risk import RiskPage
+from ui.settlement import SettlementPage
+
+from app.theme import RHINO_STYLE
+
+
+class RhinoMainWindow(QMainWindow):
+
+    def __init__(self, services):
+
+        super().__init__()
+
+        self.services = services
+
+        self.setWindowTitle(
+            "RHINOBANK // INSTITUTIONAL TERMINAL"
+        )
+
+        self.resize(
+            1600,
+            1000
+        )
+
+        self.setStyleSheet(
+            RHINO_STYLE
+        )
+
+        self.build_interface()
+
+
+    def build_interface(self):
+
+        root = QWidget()
+
+        self.setCentralWidget(
+            root
+        )
+
+        layout = QVBoxLayout(
+            root
+        )
+
+        layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0
+        )
+
+        layout.setSpacing(0)
+
+        layout.addWidget(
+            self.build_header()
+        )
+
+        body = QHBoxLayout()
+
+        body.setSpacing(0)
+
+        body.addWidget(
+            self.build_navigation()
+        )
+
+        self.pages = QStackedWidget()
+
+        self.pages.addWidget(
+            DashboardPage(
+                self.services
+            )
+        )
+
+        self.pages.addWidget(
+            MarketPage(
+                self.services
+            )
+        )
+
+        self.pages.addWidget(
+            OrdersPage(
+                self.services
+            )
+        )
+
+        self.pages.addWidget(
+            PositionsPage(
+                self.services
+            )
+        )
+
+        self.pages.addWidget(
+            AnalyticsPage(
+                self.services
+            )
+        )
+
+        self.pages.addWidget(
+            RiskPage(
+                self.services
+            )
+        )
+
+        self.pages.addWidget(
+            SettlementPage(
+                self.services
+            )
+        )
+
+        body.addWidget(
+            self.pages
+        )
+
+        layout.addLayout(
+            body
+        )
+
+        layout.addWidget(
+            self.build_status_bar()
+        )
+
+
+    def build_header(self):
+
+        frame = QFrame()
+
+        frame.setObjectName(
+            "header"
+        )
+
+        layout = QHBoxLayout(
+            frame
+        )
+
+        logo = QLabel(
+            "RHINOBANK"
+        )
+
+        logo.setObjectName(
+            "logo"
+        )
+
+        terminal = QLabel(
+            "// INSTITUTIONAL TERMINAL"
+        )
+
+        terminal.setObjectName(
+            "terminalLabel"
+        )
+
+        security = QLabel(
+            "● SECURE"
+        )
+
+        security.setObjectName(
+            "secure"
+        )
+
+        clock = QLabel(
+            "UTC 16:42:19"
+        )
+
+        clock.setObjectName(
+            "clock"
+        )
+
+        layout.addWidget(
+            logo
+        )
+
+        layout.addWidget(
+            terminal
+        )
+
+        layout.addStretch()
+
+        layout.addWidget(
+            security
+        )
+
+        layout.addWidget(
+            clock
+        )
+
+        return frame
+
+
+    def build_navigation(self):
+
+        frame = QFrame()
+
+        frame.setObjectName(
+            "navigation"
+        )
+
+        layout = QVBoxLayout(
+            frame
+        )
+
+        buttons = [
+
+            ("OVERVIEW", 0),
+            ("MARKET", 1),
+            ("ORDERS", 2),
+            ("POSITIONS", 3),
+            ("ANALYTICS", 4),
+            ("RISK", 5),
+            ("SETTLEMENT", 6)
+
+        ]
+
+        for name, index in buttons:
+
+            button = QPushButton(
+                name
+            )
+
+            button.setProperty(
+                "nav",
+                True
+            )
+
+            button.clicked.connect(
+                lambda checked=False,
+                i=index:
+                    self.pages.setCurrentIndex(i)
+            )
+
+            layout.addWidget(
+                button
+            )
+
+        layout.addStretch()
+
+        return frame
+
+
+    def build_status_bar(self):
+
+        frame = QFrame()
+
+        frame.setObjectName(
+            "status"
+        )
+
+        layout = QHBoxLayout(
+            frame
+        )
+
+        labels = [
+
+            "NODE: RHINO-LON-01",
+
+            "API: CONNECTED",
+
+            "DATABASE: HEALTHY",
+
+            "R ENGINE: ONLINE",
+
+            "AUDIT: ACTIVE"
+
+        ]
+
+        for text in labels:
+
+            label = QLabel(
+                text
+            )
+
+            label.setObjectName(
+                "statusLabel"
+            )
+
+            layout.addWidget(
+                label
+            )
+
+        layout.addStretch()
+
+        return frame
+
+
+    def status_message(
+        self,
+        message
+    ):
+
+        self.statusBar().showMessage(
+            message
+        )
+4. The actual cypherpunk skin
+# app/theme.py
+
+RHINO_STYLE = """
+
+QMainWindow,
+QWidget {
+
+    background: #020403;
+
+    color: #C7D2C9;
+
+    font-family:
+        "JetBrains Mono",
+        "Cascadia Mono",
+        monospace;
+
+}
+
+
+#header {
+
+    background: #050806;
+
+    border-bottom:
+        1px solid #1A2A20;
+
+    min-height: 52px;
+
+}
+
+
+#logo {
+
+    color: #39FF88;
+
+    font-size: 20px;
+
+    font-weight: 900;
+
+    letter-spacing: 3px;
+
+}
+
+
+#terminalLabel {
+
+    color: #536158;
+
+    font-size: 10px;
+
+    letter-spacing: 2px;
+
+}
+
+
+#secure {
+
+    color: #39FF88;
+
+    font-size: 10px;
+
+    letter-spacing: 1px;
+
+}
+
+
+#clock {
+
+    color: #8A968D;
+
+    font-size: 10px;
+
+}
+
+
+#navigation {
+
+    background: #050806;
+
+    border-right:
+        1px solid #17221A;
+
+    min-width: 155px;
+
+    max-width: 155px;
+
+}
+
+
+QPushButton[nav="true"] {
+
+    background: transparent;
+
+    border: none;
+
+    border-left:
+        2px solid transparent;
+
+    color: #657169;
+
+    text-align: left;
+
+    padding:
+        13px 12px;
+
+    font-family:
+        "JetBrains Mono",
+        monospace;
+
+    font-size: 10px;
+
+    letter-spacing: 1px;
+
+}
+
+
+QPushButton[nav="true"]:hover {
+
+    color: #39FF88;
+
+    background: #09110C;
+
+    border-left:
+        2px solid #39FF88;
+
+}
+
+
+QPushButton[nav="true"]:pressed {
+
+    background: #0D1811;
+
+}
+
+
+#status {
+
+    background: #050806;
+
+    border-top:
+        1px solid #17221A;
+
+    min-height: 28px;
+
+}
+
+
+#statusLabel {
+
+    color: #526057;
+
+    font-size: 8px;
+
+    letter-spacing: 1px;
+
+}
+
+
+QScrollBar:vertical {
+
+    background: #050806;
+
+    width: 8px;
+
+}
+
+
+QScrollBar::handle:vertical {
+
+    background: #203226;
+
+    min-height: 30px;
+
+}
+
+
+QScrollBar::handle:vertical:hover {
+
+    background: #39FF88;
+
+}
+
+
+QToolTip {
+
+    background: #071009;
+
+    color: #39FF88;
+
+    border:
+        1px solid #25402D;
+
+    padding: 6px;
+
+    font-family:
+        monospace;
+
+}
+
+"""
+5. Dashboard page
+# ui/dashboard.py
+
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QFrame,
+)
+
+
+class MetricCard(QFrame):
+
+    def __init__(
+        self,
+        label,
+        value,
+        delta=""
+    ):
+
+        super().__init__()
+
+        self.setObjectName(
+            "metricCard"
+        )
+
+        layout = QVBoxLayout(
+            self
+        )
+
+        title = QLabel(
+            label
+        )
+
+        title.setStyleSheet(
+            "color:#58655D;"
+            "font-size:9px;"
+            "letter-spacing:1px;"
+        )
+
+        number = QLabel(
+            value
+        )
+
+        number.setStyleSheet(
+            "color:#ECF7EE;"
+            "font-size:22px;"
+            "font-weight:bold;"
+        )
+
+        change = QLabel(
+            delta
+        )
+
+        change.setStyleSheet(
+            "color:#39FF88;"
+            "font-size:10px;"
+        )
+
+        layout.addWidget(
+            title
+        )
+
+        layout.addWidget(
+            number
+        )
+
+        layout.addWidget(
+            change
+        )
+
+
+class DashboardPage(QWidget):
+
+    def __init__(self, services):
+
+        super().__init__()
+
+        self.services = services
+
+        self.build()
+
+
+    def build(self):
+
+        layout = QVBoxLayout(
+            self
+        )
+
+        title = QLabel(
+            "ACCOUNT OVERVIEW"
+        )
+
+        title.setStyleSheet(
+            "color:#ECF7EE;"
+            "font-size:18px;"
+            "font-weight:bold;"
+        )
+
+        layout.addWidget(
+            title
+        )
+
+        cards = QHBoxLayout()
+
+        cards.addWidget(
+            MetricCard(
+                "NET ASSET VALUE",
+                "$12,481,291",
+                "+8.41%"
+            )
+        )
+
+        cards.addWidget(
+            MetricCard(
+                "BUYING POWER",
+                "$4,218,920",
+                "AVAILABLE"
+            )
+        )
+
+        cards.addWidget(
+            MetricCard(
+                "EXPOSURE",
+                "$8,262,371",
+                "66.2%"
+            )
+        )
+
+        cards.addWidget(
+            MetricCard(
+                "MAX DRAW DOWN",
+                "-8.31%",
+                "WITHIN LIMIT"
+            )
+        )
+
+        layout.addLayout(
+            cards
+        )
+
+        chart = QLabel(
+            "RHINO-STAT // EQUITY TELEMETRY"
+        )
+
+        chart.setMinimumHeight(
+            500
+        )
+
+        chart.setAlignment(
+            Qt.AlignCenter
+        )
+
+        chart.setStyleSheet(
+            """
+            background:#080C09;
+            border:1px solid #17221A;
+            color:#39FF88;
+            """
+        )
+
+        layout.addWidget(
+            chart
+        )
+6. R integration
+
+The wrapper can launch R as a separate analytics process rather than embedding R directly into the Qt event loop.
+
+# analytics/r_engine.py
+
+import subprocess
+import json
+from pathlib import Path
+
+
+class REngine:
+
+    def __init__(self):
+
+        self.rscript = "Rscript"
+
+        self.script_directory = Path(
+            "analytics/r"
+        )
+
+
+    def execute(
+        self,
+        script,
+        payload
+    ):
+
+        process = subprocess.run(
+
+            [
+                self.rscript,
+
+                str(
+                    self.script_directory /
+                    script
+                ),
+
+                json.dumps(
+                    payload
+                )
+
+            ],
+
+            capture_output=True,
+
+            text=True,
+
+            check=False
+
+        )
+
+        if process.returncode != 0:
+
+            raise RuntimeError(
+                process.stderr
+            )
+
+        return process.stdout
+
+
+    def shutdown(self):
+
+        pass
+
+This is preferable to making the Qt application depend directly on an R runtime for every UI operation.
+
+The key architectural idea
+
+The Python wrapper becomes the orchestrator:
+
+                         RHINOBANK.EXE
+                              │
+                     PYTHON APPLICATION
+                              │
+          ┌───────────────────┼───────────────────┐
+          │                   │                   │
+          ▼                   ▼                   ▼
+     Qt/PySide6          Python Core          R Analytics
+     GUI SHELL           Trading             Statistics
+          │                   │                   │
+          │                   ├── Orders         ├── Sharpe
+          │                   ├── Positions      ├── VaR
+          │                   ├── Escrow         ├── Drawdown
+          │                   ├── Settlement     ├── Volatility
+          │                   └── Risk           └── Performance
+          │
+          ▼
+     CHART / TERMINAL
+          │
+          ▼
+       USER
+
+I'd also give the wrapper a proper workspace/session system:
+
+workspace = {
+    "workspace_id": "RHB-WS-001",
+
+    "account": "RHB-INST-001",
+
+    "panels": [
+        "market",
+        "orders",
+        "positions",
+        "risk",
+        "analytics"
+    ],
+
+    "layout": {
+        "market": {
+            "x": 0,
+            "y": 0,
+            "width": 600,
+            "height": 400
+        }
+    },
+
+    "preferences": {
+        "currency": "USDT",
+        "timezone": "UTC",
+        "chart_theme": "RHINO_DARK",
+        "animations": False
+    }
+}
