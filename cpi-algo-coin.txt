@@ -1,0 +1,1343 @@
+# RHINOBANK // RHINO-CPI
+
+## CPI-INDEXED ALGORITHMIC STABLECOIN ENGINE
+
+```python
+"""
+RHINOBANK // RHINO-CPI
+
+CPI-indexed stablecoin prototype.
+
+IMPORTANT:
+    This is an engineering prototype / monetary-policy simulator.
+    It is NOT production-ready financial infrastructure.
+
+Design:
+
+    Official CPI/HICP index
+             |
+             v
+       CPI Oracle Layer
+             |
+             v
+      Index Normalisation
+             |
+             v
+       Target Price Engine
+             |
+             v
+      Monetary Policy Engine
+        /             \
+      mint             burn
+        \             /
+             v
+       Collateral Engine
+             |
+             v
+         RHINO Token
+
+Core principle:
+
+    RHINO target value changes with CPI.
+
+    target(t) =
+        base_value *
+        CPI(t) / CPI(base)
+
+No assumption is made that an algorithm by itself
+creates economic solvency. The reserve/collateral,
+redemption mechanism, liquidity and governance remain
+critical.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal, getcontext
+from enum import Enum
+from typing import Dict, List, Optional
+import hashlib
+import json
+import math
+
+
+# ============================================================
+# PRECISION
+# ============================================================
+
+getcontext().prec = 50
+
+D = Decimal
+
+
+# ============================================================
+# INDEX PROVIDERS
+# ============================================================
+
+class IndexProvider(str, Enum):
+
+    US_CPI = "US_CPI"
+
+    UK_CPI = "UK_CPI"
+
+    EURO_HICP = "EURO_HICP"
+
+    JAPAN_CPI = "JAPAN_CPI"
+
+
+@dataclass(frozen=True)
+class IndexDefinition:
+
+    provider: IndexProvider
+
+    code: str
+
+    currency: str
+
+    name: str
+
+    base_period: str
+
+    publication_lag_days: int
+
+
+INDEXES = {
+
+    IndexProvider.US_CPI:
+        IndexDefinition(
+            provider=IndexProvider.US_CPI,
+            code="CPI-U",
+            currency="USD",
+            name="US Consumer Price Index",
+            base_period="1982-1984",
+            publication_lag_days=14,
+        ),
+
+    IndexProvider.UK_CPI:
+        IndexDefinition(
+            provider=IndexProvider.UK_CPI,
+            code="UK-CPI",
+            currency="GBP",
+            name="UK Consumer Prices Index",
+            base_period="2015",
+            publication_lag_days=20,
+        ),
+
+    IndexProvider.EURO_HICP:
+        IndexDefinition(
+            provider=IndexProvider.EURO_HICP,
+            code="EA-HICP",
+            currency="EUR",
+            name="Euro Area Harmonised Index of Consumer Prices",
+            base_period="2015",
+            publication_lag_days=30,
+        ),
+
+    IndexProvider.JAPAN_CPI:
+        IndexDefinition(
+            provider=IndexProvider.JAPAN_CPI,
+            code="JP-CPI",
+            currency="JPY",
+            name="Japan Consumer Price Index",
+            base_period="2020",
+            publication_lag_days=25,
+        ),
+}
+
+
+# ============================================================
+# CPI OBSERVATION
+# ============================================================
+
+@dataclass(frozen=True)
+class CPIObservation:
+
+    provider: IndexProvider
+
+    period: str
+
+    index_value: D
+
+    publication_time: datetime
+
+    source: str
+
+    revision: int = 0
+
+
+# ============================================================
+# CPI ORACLE
+# ============================================================
+
+class CPIOracle:
+
+    """
+    Stores authenticated CPI observations.
+
+    Production implementation should ingest official
+    statistical releases and maintain immutable historical
+    observations plus revisions.
+    """
+
+    def __init__(self):
+
+        self._observations: Dict[
+            IndexProvider,
+            List[CPIObservation]
+        ] = {}
+
+        self._observations = {
+            provider: []
+            for provider in IndexProvider
+        }
+
+
+    def publish(
+        self,
+        observation: CPIObservation
+    ):
+
+        self._observations[
+            observation.provider
+        ].append(observation)
+
+        self._observations[
+            observation.provider
+        ].sort(
+            key=lambda x: x.period
+        )
+
+
+    def latest(
+        self,
+        provider: IndexProvider
+    ) -> CPIObservation:
+
+        observations = self._observations[
+            provider
+        ]
+
+        if not observations:
+            raise ValueError(
+                f"No CPI observations for {provider}"
+            )
+
+        return observations[-1]
+
+
+    def get(
+        self,
+        provider: IndexProvider,
+        period: str
+    ) -> CPIObservation:
+
+        matches = [
+
+            x for x in
+            self._observations[provider]
+
+            if x.period == period
+
+        ]
+
+        if not matches:
+
+            raise KeyError(
+                f"CPI period unavailable: {period}"
+            )
+
+        return matches[-1]
+
+
+# ============================================================
+# RHINO CPI UNIT
+# ============================================================
+
+@dataclass
+class RhinoCPIUnit:
+
+    symbol: str
+
+    provider: IndexProvider
+
+    base_cpi: D
+
+    base_value: D
+
+    created_at: datetime
+
+
+class CPITargetEngine:
+
+    """
+    Calculates the nominal target value of RHINO.
+
+        target =
+            base_value *
+            current_cpi /
+            base_cpi
+    """
+
+    def __init__(
+        self,
+        unit: RhinoCPIUnit
+    ):
+
+        self.unit = unit
+
+
+    def target_price(
+        self,
+        current_cpi: D
+    ) -> D:
+
+        if current_cpi <= 0:
+            raise ValueError(
+                "CPI must be positive"
+            )
+
+        return (
+
+            self.unit.base_value
+            *
+            current_cpi
+            /
+            self.unit.base_cpi
+
+        )
+
+
+    def inflation_since_base(
+        self,
+        current_cpi: D
+    ) -> D:
+
+        return (
+
+            current_cpi /
+            self.unit.base_cpi
+
+        ) - D("1")
+
+
+# ============================================================
+# MARKET STATE
+# ============================================================
+
+@dataclass
+class MarketState:
+
+    market_price: D
+
+    target_price: D
+
+    reserve_value: D
+
+    circulating_supply: D
+
+    timestamp: datetime
+
+
+# ============================================================
+# COLLATERAL MODEL
+# ============================================================
+
+@dataclass
+class CollateralPool:
+
+    cash: D = D("0")
+
+    government_bonds: D = D("0")
+
+    crypto: D = D("0")
+
+    commodities: D = D("0")
+
+
+    @property
+    def total_value(self) -> D:
+
+        return (
+
+            self.cash
+            +
+            self.government_bonds
+            +
+            self.crypto
+            +
+            self.commodities
+
+        )
+
+
+# ============================================================
+# RESERVE POLICY
+# ============================================================
+
+@dataclass
+class ReservePolicy:
+
+    minimum_ratio: D = D("1.10")
+
+    target_ratio: D = D("1.25")
+
+    critical_ratio: D = D("1.03")
+
+    maximum_mint_per_epoch: D = D("1000000")
+
+    maximum_burn_per_epoch: D = D("1000000")
+
+
+# ============================================================
+# MONETARY POLICY
+# ============================================================
+
+class MonetaryAction(str, Enum):
+
+    NONE = "NONE"
+
+    MINT = "MINT"
+
+    BURN = "BURN"
+
+    HALT = "HALT"
+
+
+@dataclass
+class PolicyDecision:
+
+    action: MonetaryAction
+
+    amount: D
+
+    reason: str
+
+    target_price: D
+
+    market_price: D
+
+    reserve_ratio: D
+
+
+# ============================================================
+# POLICY ENGINE
+# ============================================================
+
+class MonetaryPolicyEngine:
+
+    """
+    Simple market-targeting mechanism.
+
+    If market price is sufficiently below target:
+        burn supply / increase demand
+
+    If market price is sufficiently above target:
+        mint supply / increase supply
+
+    In production this MUST NOT be treated as sufficient
+    by itself. It requires robust collateral, redemption,
+    liquidity and stress mechanisms.
+    """
+
+    def __init__(
+        self,
+        reserve_policy: ReservePolicy,
+        tolerance: D = D("0.005")
+    ):
+
+        self.reserve_policy = reserve_policy
+
+        self.tolerance = tolerance
+
+
+    def decide(
+        self,
+        market: MarketState
+    ) -> PolicyDecision:
+
+        if market.circulating_supply <= 0:
+
+            return PolicyDecision(
+                action=MonetaryAction.NONE,
+                amount=D("0"),
+                reason="No circulating supply",
+                target_price=market.target_price,
+                market_price=market.market_price,
+                reserve_ratio=D("0"),
+            )
+
+
+        liability_value = (
+
+            market.circulating_supply
+            *
+            market.target_price
+
+        )
+
+        reserve_ratio = (
+
+            market.reserve_value /
+            liability_value
+
+        )
+
+
+        if reserve_ratio < self.reserve_policy.critical_ratio:
+
+            return PolicyDecision(
+                action=MonetaryAction.HALT,
+                amount=D("0"),
+                reason="Critical reserve ratio",
+                target_price=market.target_price,
+                market_price=market.market_price,
+                reserve_ratio=reserve_ratio,
+            )
+
+
+        deviation = (
+
+            market.market_price /
+            market.target_price
+
+        ) - D("1")
+
+
+        # ----------------------------------------------------
+        # ABOVE TARGET
+        # ----------------------------------------------------
+
+        if deviation > self.tolerance:
+
+            gap = (
+
+                market.market_price -
+                market.target_price
+
+            )
+
+            desired_notional = (
+
+                gap /
+                market.market_price
+
+            ) * market.circulating_supply
+
+
+            amount = min(
+
+                desired_notional,
+
+                self.reserve_policy
+                    .maximum_mint_per_epoch
+
+            )
+
+
+            return PolicyDecision(
+                action=MonetaryAction.MINT,
+                amount=max(
+                    D("0"),
+                    amount
+                ),
+                reason="Market price above CPI target",
+                target_price=market.target_price,
+                market_price=market.market_price,
+                reserve_ratio=reserve_ratio,
+            )
+
+
+        # ----------------------------------------------------
+        # BELOW TARGET
+        # ----------------------------------------------------
+
+        if deviation < -self.tolerance:
+
+            gap = (
+
+                market.target_price -
+                market.market_price
+
+            )
+
+            desired_notional = (
+
+                gap /
+                market.target_price
+
+            ) * market.circulating_supply
+
+
+            amount = min(
+
+                desired_notional,
+
+                self.reserve_policy
+                    .maximum_burn_per_epoch
+
+            )
+
+
+            return PolicyDecision(
+                action=MonetaryAction.BURN,
+                amount=max(
+                    D("0"),
+                    amount
+                ),
+                reason="Market price below CPI target",
+                target_price=market.target_price,
+                market_price=market.market_price,
+                reserve_ratio=reserve_ratio,
+            )
+
+
+        return PolicyDecision(
+            action=MonetaryAction.NONE,
+            amount=D("0"),
+            reason="Within target band",
+            target_price=market.target_price,
+            market_price=market.market_price,
+            reserve_ratio=reserve_ratio,
+        )
+
+
+# ============================================================
+# TOKEN LEDGER
+# ============================================================
+
+class TokenLedger:
+
+    def __init__(self):
+
+        self.balances: Dict[str, D] = {}
+
+        self.total_supply = D("0")
+
+
+    def balance_of(
+        self,
+        account: str
+    ) -> D:
+
+        return self.balances.get(
+            account,
+            D("0")
+        )
+
+
+    def mint(
+        self,
+        account: str,
+        amount: D
+    ):
+
+        if amount <= 0:
+            raise ValueError(
+                "Mint amount must be positive"
+            )
+
+        self.balances[account] = (
+
+            self.balance_of(account)
+            +
+            amount
+
+        )
+
+        self.total_supply += amount
+
+
+    def burn(
+        self,
+        account: str,
+        amount: D
+    ):
+
+        if amount <= 0:
+            raise ValueError(
+                "Burn amount must be positive"
+            )
+
+        balance = self.balance_of(
+            account
+        )
+
+        if balance < amount:
+            raise ValueError(
+                "Insufficient RHINO balance"
+            )
+
+        self.balances[account] = (
+            balance - amount
+        )
+
+        self.total_supply -= amount
+
+
+# ============================================================
+# TRANSACTION
+# ============================================================
+
+@dataclass
+class MonetaryTransaction:
+
+    transaction_id: str
+
+    action: MonetaryAction
+
+    amount: D
+
+    target_price: D
+
+    market_price: D
+
+    reserve_ratio: D
+
+    timestamp: datetime
+
+    reason: str
+
+    previous_hash: str = ""
+
+    transaction_hash: str = ""
+
+
+# ============================================================
+# AUDIT LEDGER
+# ============================================================
+
+class AuditLedger:
+
+    def __init__(self):
+
+        self.transactions: List[
+            MonetaryTransaction
+        ] = []
+
+
+    def append(
+        self,
+        transaction: MonetaryTransaction
+    ):
+
+        previous_hash = (
+
+            self.transactions[-1].transaction_hash
+
+            if self.transactions
+
+            else "GENESIS"
+
+        )
+
+        transaction.previous_hash = (
+            previous_hash
+        )
+
+        payload = {
+
+            "id":
+                transaction.transaction_id,
+
+            "action":
+                transaction.action.value,
+
+            "amount":
+                str(transaction.amount),
+
+            "target":
+                str(transaction.target_price),
+
+            "market":
+                str(transaction.market_price),
+
+            "reserve_ratio":
+                str(transaction.reserve_ratio),
+
+            "timestamp":
+                transaction.timestamp.isoformat(),
+
+            "reason":
+                transaction.reason,
+
+            "previous_hash":
+                previous_hash
+
+        }
+
+        encoded = json.dumps(
+            payload,
+            sort_keys=True
+        ).encode()
+
+        transaction.transaction_hash = (
+            hashlib.sha256(
+                encoded
+            ).hexdigest()
+        )
+
+        self.transactions.append(
+            transaction
+        )
+
+
+# ============================================================
+# RHINO STABLECOIN
+# ============================================================
+
+class RhinoStablecoin:
+
+    def __init__(
+
+        self,
+
+        symbol: str,
+
+        provider: IndexProvider,
+
+        base_cpi: D,
+
+        base_value: D,
+
+        reserve_policy:
+            Optional[ReservePolicy] = None
+
+    ):
+
+        self.unit = RhinoCPIUnit(
+
+            symbol=symbol,
+
+            provider=provider,
+
+            base_cpi=base_cpi,
+
+            base_value=base_value,
+
+            created_at=datetime.utcnow()
+
+        )
+
+        self.target_engine = (
+            CPITargetEngine(
+                self.unit
+            )
+        )
+
+        self.reserve = (
+            CollateralPool()
+        )
+
+        self.reserve_policy = (
+
+            reserve_policy
+
+            or ReservePolicy()
+
+        )
+
+        self.policy = (
+            MonetaryPolicyEngine(
+                self.reserve_policy
+            )
+        )
+
+        self.ledger = (
+            TokenLedger()
+        )
+
+        self.audit = (
+            AuditLedger()
+        )
+
+
+    # --------------------------------------------------------
+    # TARGET
+    # --------------------------------------------------------
+
+    def target_price(
+        self,
+        cpi: D
+    ) -> D:
+
+        return self.target_engine.target_price(
+            cpi
+        )
+
+
+    # --------------------------------------------------------
+    # MARKET DECISION
+    # --------------------------------------------------------
+
+    def policy_decision(
+        self,
+        market_price: D,
+        cpi: D,
+        timestamp: datetime
+    ) -> PolicyDecision:
+
+        target = self.target_price(
+            cpi
+        )
+
+        state = MarketState(
+
+            market_price=market_price,
+
+            target_price=target,
+
+            reserve_value=
+                self.reserve.total_value,
+
+            circulating_supply=
+                self.ledger.total_supply,
+
+            timestamp=timestamp
+
+        )
+
+        return self.policy.decide(
+            state
+        )
+
+
+    # --------------------------------------------------------
+    # EXECUTE POLICY
+    # --------------------------------------------------------
+
+    def execute(
+
+        self,
+
+        decision: PolicyDecision,
+
+        treasury_account: str
+
+    ):
+
+        if decision.action == (
+            MonetaryAction.HALT
+        ):
+
+            raise RuntimeError(
+                "RHINO monetary system halted"
+            )
+
+
+        if decision.action == (
+            MonetaryAction.MINT
+        ):
+
+            self.ledger.mint(
+
+                treasury_account,
+
+                decision.amount
+
+            )
+
+
+        elif decision.action == (
+            MonetaryAction.BURN
+        ):
+
+            treasury_balance = (
+                self.ledger.balance_of(
+                    treasury_account
+                )
+            )
+
+            amount = min(
+
+                decision.amount,
+
+                treasury_balance
+
+            )
+
+            if amount > 0:
+
+                self.ledger.burn(
+
+                    treasury_account,
+
+                    amount
+
+                )
+
+        transaction = (
+            MonetaryTransaction(
+
+                transaction_id=
+                    self._transaction_id(),
+
+                action=
+                    decision.action,
+
+                amount=
+                    decision.amount,
+
+                target_price=
+                    decision.target_price,
+
+                market_price=
+                    decision.market_price,
+
+                reserve_ratio=
+                    decision.reserve_ratio,
+
+                timestamp=
+                    datetime.utcnow(),
+
+                reason=
+                    decision.reason
+
+            )
+        )
+
+        self.audit.append(
+            transaction
+        )
+
+
+    def _transaction_id(self):
+
+        raw = (
+
+            f"{self.unit.symbol}:"
+            f"{datetime.utcnow().isoformat()}:"
+            f"{len(self.audit.transactions)}"
+
+        )
+
+        return hashlib.sha256(
+            raw.encode()
+        ).hexdigest()[:32]
+
+
+# ============================================================
+# CPI UNIT CREATION
+# ============================================================
+
+def create_rhino_usd():
+
+    return RhinoStablecoin(
+
+        symbol="RHINO-USD",
+
+        provider=
+            IndexProvider.US_CPI,
+
+        base_cpi=
+            D("100"),
+
+        base_value=
+            D("1.00")
+
+    )
+
+
+def create_rhino_gbp():
+
+    return RhinoStablecoin(
+
+        symbol="RHINO-GBP",
+
+        provider=
+            IndexProvider.UK_CPI,
+
+        base_cpi=
+            D("100"),
+
+        base_value=
+            D("1.00")
+
+    )
+
+
+def create_rhino_eur():
+
+    return RhinoStablecoin(
+
+        symbol="RHINO-EUR",
+
+        provider=
+            IndexProvider.EURO_HICP,
+
+        base_cpi=
+            D("100"),
+
+        base_value=
+            D("1.00")
+
+    )
+
+
+def create_rhino_jpy():
+
+    return RhinoStablecoin(
+
+        symbol="RHINO-JPY",
+
+        provider=
+            IndexProvider.JAPAN_CPI,
+
+        base_cpi=
+            D("100"),
+
+        base_value=
+            D("1.00")
+
+    )
+
+
+# ============================================================
+# DEMONSTRATION
+# ============================================================
+
+if __name__ == "__main__":
+
+    rhino = create_rhino_gbp()
+
+
+    # Example CPI movement:
+    #
+    # Base CPI = 100
+    # Current CPI = 112
+    #
+    # Therefore:
+    #
+    # RHINO target =
+    #     £1 * 112 / 100
+    #
+    # = £1.12
+
+    current_cpi = D("112")
+
+    target = rhino.target_price(
+        current_cpi
+    )
+
+    print(
+        "RHINO TARGET:",
+        target
+    )
+
+
+    # Example reserve
+
+    rhino.reserve.cash = (
+        D("10_000_000")
+    )
+
+
+    # Seed supply
+
+    rhino.ledger.mint(
+
+        "RHINOBANK-TREASURY",
+
+        D("7_000_000")
+
+    )
+
+
+    # Market price below target
+
+    decision = rhino.policy_decision(
+
+        market_price=
+            D("1.105"),
+
+        cpi=
+            current_cpi,
+
+        timestamp=
+            datetime.utcnow()
+
+    )
+
+
+    print(
+        "ACTION:",
+        decision.action
+    )
+
+    print(
+        "AMOUNT:",
+        decision.amount
+    )
+
+    print(
+        "TARGET:",
+        decision.target_price
+    )
+
+    print(
+        "RESERVE RATIO:",
+        decision.reserve_ratio
+    )
+
+
+    if decision.action != (
+        MonetaryAction.HALT
+    ):
+
+        rhino.execute(
+
+            decision,
+
+            "RHINOBANK-TREASURY"
+
+        )
+
+
+    print(
+        "TOTAL SUPPLY:",
+        rhino.ledger.total_supply
+    )
+```
+
+## Multi-index architecture
+
+I would not make one token dynamically jump between US CPI, UK CPI, euro HICP and Japanese CPI. Instead, issue separate units:
+
+```text
+                    RHINOBANK CPI NETWORK
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+              ▼              ▼              ▼
+          RHINO-USD      RHINO-GBP      RHINO-EUR
+              │              │              │
+           US CPI          UK CPI         HICP
+              │              │              │
+           BLS data        ONS data      Eurostat
+```
+
+and potentially:
+
+```text
+                         RHINO-JPY
+                             │
+                         Japan CPI
+```
+
+The ECB specifically identifies HICP as its euro-area price-stability measure, so calling the euro product **RHINO-EUR/HICP** rather than "EUR/CPI" would be technically cleaner.
+
+### The important monetary equation
+
+The heart of the system is:
+
+```python
+target = (
+    base_value
+    * current_cpi
+    / base_cpi
+)
+```
+
+For example:
+
+```text
+BASE CPI                    100.000
+
+CURRENT CPI                 112.000
+
+CPI CHANGE                  +12.00%
+
+BASE RHINO VALUE            1.000000
+
+TARGET RHINO VALUE          1.120000
+```
+
+So **RHINO is targeting purchasing power**, rather than a fixed fiat denomination.
+
+### But I would change one major thing before calling it "algorithmic"
+
+I would **not** allow the algorithm to mint unlimited RHINO merely because market price is above the CPI target.
+
+Instead:
+
+```text
+                    CPI ORACLE
+                        │
+                        ▼
+                 TARGET PRICE
+                        │
+                        ▼
+                  MARKET PRICE
+                        │
+                 deviation engine
+                        │
+          ┌─────────────┴─────────────┐
+          ▼                           ▼
+     ABOVE TARGET               BELOW TARGET
+          │                           │
+       MINT BAND                  BURN BAND
+          │                           │
+          ▼                           ▼
+   COLLATERAL TEST             RESERVE TEST
+          │                           │
+       PASS/FAIL                   PASS/FAIL
+          │                           │
+          └─────────────┬─────────────┘
+                        ▼
+                   CIRCUIT BREAKER
+                        │
+                        ▼
+                   EXECUTION
+                        │
+                        ▼
+                 IMMUTABLE AUDIT
+```
+
+That matters because **CPI itself is a low-frequency external index**. It does not give you a continuously observable market price. The US CPI, for example, is published as a monthly statistical series, and BLS notes that releases can subsequently be revised.
+
+So the production system should use **two separate clocks**:
+
+```text
+CPI CLOCK
+monthly
+     │
+     ▼
+fundamental target
+
+MARKET CLOCK
+millisecond/second
+     │
+     ▼
+secondary-market price discovery
+```
+
+That gives RhinoBank something much more interesting than a normal dollar stablecoin: an explicitly defined **inflation-indexed monetary unit**.
+
+For example, a RhinoBank account could ultimately show:
+
+```text
+RHINOBANK ACCOUNT
+────────────────────────────────────────────
+
+RHINO-GBP
+
+Balance                 2,500.000000 RHINO
+
+CPI BASE                 100.000
+CURRENT CPI              112.000
+
+PURCHASING-POWER TARGET  £1.120000
+
+REFERENCE VALUE          £2,800.00
+
+MARKET VALUE             £2,794.25
+
+PEG DEVIATION            -0.205%
+
+RESERVE RATIO            126.8%
+
+STATUS                   ● NORMAL
+```
+
+That is the direction I'd take the RhinoBank system: **CPI oracle → inflation-indexed unit → collateral/risk engine → algorithmic supply management → market liquidity → auditable settlement**, rather than simply copying the architecture of USDT/USDC.
+
