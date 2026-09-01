@@ -1,0 +1,1203 @@
+"""
+RHINOBANK ACCOUNT CORE
+=======================
+
+Institutional multi-asset account model.
+
+Domains:
+    Identity
+    Treasury
+    Trading
+    Physical
+    Risk
+    Settlement
+
+This is an in-memory prototype intended as the foundation for
+an enterprise banking / trading platform.
+
+For production:
+    - PostgreSQL should replace in-memory state
+    - Decimal values should be persisted as exact numeric types
+    - All state changes should be append-only ledger events
+    - Authentication/authorization should be externalized
+    - Orders should pass through a proper OMS/risk gateway
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from enum import Enum
+from typing import Dict, List, Optional
+from uuid import uuid4
+
+
+# ============================================================
+# UTILITIES
+# ============================================================
+
+def now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def money(value) -> Decimal:
+    """Convert a value into an exact Decimal."""
+    try:
+        return Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"Invalid monetary value: {value}") from exc
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex[:16]}"
+
+
+# ============================================================
+# ENUMERATIONS
+# ============================================================
+
+class Role(str, Enum):
+    ADMIN = "ADMIN"
+    TREASURER = "TREASURER"
+    TRADER = "TRADER"
+    OPERATIONS = "OPERATIONS"
+    RISK = "RISK"
+    VIEWER = "VIEWER"
+
+
+class OrderSide(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderStatus(str, Enum):
+    OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+
+
+class SettlementType(str, Enum):
+    FIAT = "FIAT"
+    USDT = "USDT"
+    PHYSICAL = "PHYSICAL"
+
+
+# ============================================================
+# IDENTITY
+# ============================================================
+
+@dataclass
+class Identity:
+    account_id: str
+    institutional_name: str
+    role: Role
+    permissions: set[str] = field(default_factory=set)
+
+    def can(self, permission: str) -> bool:
+        return permission in self.permissions
+
+
+# ============================================================
+# TREASURY
+# ============================================================
+
+@dataclass
+class Wallet:
+    currency: str
+    available: Decimal = Decimal("0")
+    reserved: Decimal = Decimal("0")
+
+    @property
+    def total(self) -> Decimal:
+        return self.available + self.reserved
+
+    def credit(self, amount: Decimal) -> None:
+        amount = money(amount)
+
+        if amount <= 0:
+            raise ValueError("Credit must be positive.")
+
+        self.available += amount
+
+    def debit(self, amount: Decimal) -> None:
+        amount = money(amount)
+
+        if amount <= 0:
+            raise ValueError("Debit must be positive.")
+
+        if amount > self.available:
+            raise ValueError(
+                f"Insufficient {self.currency} balance."
+            )
+
+        self.available -= amount
+
+    def reserve(self, amount: Decimal) -> None:
+        amount = money(amount)
+
+        if amount <= 0:
+            raise ValueError("Reserve must be positive.")
+
+        if amount > self.available:
+            raise ValueError(
+                f"Insufficient available {self.currency}."
+            )
+
+        self.available -= amount
+        self.reserved += amount
+
+    def release(self, amount: Decimal) -> None:
+        amount = money(amount)
+
+        if amount <= 0:
+            raise ValueError("Release must be positive.")
+
+        if amount > self.reserved:
+            raise ValueError(
+                f"Cannot release more than reserved {self.currency}."
+            )
+
+        self.reserved -= amount
+        self.available += amount
+
+
+@dataclass
+class Treasury:
+    wallets: Dict[str, Wallet] = field(default_factory=dict)
+
+    SUPPORTED_CURRENCIES = ("USD", "GBP", "EUR", "USDT")
+
+    def __post_init__(self):
+        for currency in self.SUPPORTED_CURRENCIES:
+            self.wallets.setdefault(
+                currency,
+                Wallet(currency=currency)
+            )
+
+    def wallet(self, currency: str) -> Wallet:
+        currency = currency.upper()
+
+        if currency not in self.wallets:
+            raise ValueError(
+                f"Unsupported treasury currency: {currency}"
+            )
+
+        return self.wallets[currency]
+
+    def deposit(self, currency: str, amount) -> None:
+        self.wallet(currency).credit(money(amount))
+
+    def withdraw(self, currency: str, amount) -> None:
+        self.wallet(currency).debit(money(amount))
+
+    def reserve(self, currency: str, amount) -> None:
+        self.wallet(currency).reserve(money(amount))
+
+    def release(self, currency: str, amount) -> None:
+        self.wallet(currency).release(money(amount))
+
+    def snapshot(self) -> dict:
+        return {
+            currency: {
+                "available": str(wallet.available),
+                "reserved": str(wallet.reserved),
+                "total": str(wallet.total),
+            }
+            for currency, wallet in self.wallets.items()
+        }
+
+
+# ============================================================
+# TRADING
+# ============================================================
+
+@dataclass
+class Position:
+    symbol: str
+    quantity: Decimal = Decimal("0")
+    average_price: Decimal = Decimal("0")
+
+    def market_value(self, price) -> Decimal:
+        return self.quantity * money(price)
+
+    def buy(self, quantity, price) -> None:
+        quantity = money(quantity)
+        price = money(price)
+
+        if quantity <= 0 or price <= 0:
+            raise ValueError("Quantity and price must be positive.")
+
+        old_value = self.quantity * self.average_price
+        new_value = quantity * price
+
+        self.quantity += quantity
+
+        if self.quantity > 0:
+            self.average_price = (
+                old_value + new_value
+            ) / self.quantity
+
+    def sell(self, quantity) -> None:
+        quantity = money(quantity)
+
+        if quantity <= 0:
+            raise ValueError("Quantity must be positive.")
+
+        if quantity > self.quantity:
+            raise ValueError(
+                f"Cannot sell {quantity} {self.symbol}; "
+                f"position is {self.quantity}."
+            )
+
+        self.quantity -= quantity
+
+        if self.quantity == 0:
+            self.average_price = Decimal("0")
+
+
+@dataclass
+class Order:
+    order_id: str
+    symbol: str
+    side: OrderSide
+    quantity: Decimal
+    price: Decimal
+    status: OrderStatus = OrderStatus.OPEN
+    filled_quantity: Decimal = Decimal("0")
+    created_at: datetime = field(default_factory=now)
+
+    @property
+    def remaining_quantity(self) -> Decimal:
+        return self.quantity - self.filled_quantity
+
+    @property
+    def notional(self) -> Decimal:
+        return self.quantity * self.price
+
+
+@dataclass
+class Trade:
+    trade_id: str
+    order_id: str
+    symbol: str
+    side: OrderSide
+    quantity: Decimal
+    price: Decimal
+    executed_at: datetime = field(default_factory=now)
+
+    @property
+    def notional(self) -> Decimal:
+        return self.quantity * self.price
+
+
+@dataclass
+class TradingBook:
+    buying_power: Decimal = Decimal("0")
+    orders: Dict[str, Order] = field(default_factory=dict)
+    positions: Dict[str, Position] = field(default_factory=dict)
+    trade_blotter: List[Trade] = field(default_factory=list)
+
+    def set_buying_power(self, amount) -> None:
+        amount = money(amount)
+
+        if amount < 0:
+            raise ValueError("Buying power cannot be negative.")
+
+        self.buying_power = amount
+
+    def create_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity,
+        price
+    ) -> Order:
+
+        quantity = money(quantity)
+        price = money(price)
+
+        if quantity <= 0:
+            raise ValueError("Quantity must be positive.")
+
+        if price <= 0:
+            raise ValueError("Price must be positive.")
+
+        notional = quantity * price
+
+        if side == OrderSide.BUY and notional > self.buying_power:
+            raise ValueError(
+                f"Insufficient buying power: "
+                f"required={notional}, "
+                f"available={self.buying_power}"
+            )
+
+        order = Order(
+            order_id=new_id("ord"),
+            symbol=symbol.upper(),
+            side=side,
+            quantity=quantity,
+            price=price,
+        )
+
+        self.orders[order.order_id] = order
+
+        return order
+
+    def execute_order(
+        self,
+        order_id: str,
+        fill_quantity,
+        fill_price
+    ) -> Trade:
+
+        if order_id not in self.orders:
+            raise KeyError(f"Unknown order: {order_id}")
+
+        order = self.orders[order_id]
+
+        if order.status not in (
+            OrderStatus.OPEN,
+            OrderStatus.PARTIALLY_FILLED
+        ):
+            raise ValueError(
+                f"Order {order_id} is not executable."
+            )
+
+        fill_quantity = money(fill_quantity)
+        fill_price = money(fill_price)
+
+        if fill_quantity <= 0:
+            raise ValueError("Fill quantity must be positive.")
+
+        if fill_quantity > order.remaining_quantity:
+            raise ValueError(
+                "Fill exceeds remaining order quantity."
+            )
+
+        notional = fill_quantity * fill_price
+
+        position = self.positions.setdefault(
+            order.symbol,
+            Position(symbol=order.symbol)
+        )
+
+        if order.side == OrderSide.BUY:
+
+            if notional > self.buying_power:
+                raise ValueError(
+                    "Execution would exceed buying power."
+                )
+
+            self.buying_power -= notional
+            position.buy(fill_quantity, fill_price)
+
+        else:
+            position.sell(fill_quantity)
+
+        order.filled_quantity += fill_quantity
+
+        if order.filled_quantity == order.quantity:
+            order.status = OrderStatus.FILLED
+        else:
+            order.status = OrderStatus.PARTIALLY_FILLED
+
+        trade = Trade(
+            trade_id=new_id("trd"),
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=fill_quantity,
+            price=fill_price,
+        )
+
+        self.trade_blotter.append(trade)
+
+        return trade
+
+    def cancel_order(self, order_id: str) -> None:
+        if order_id not in self.orders:
+            raise KeyError(f"Unknown order: {order_id}")
+
+        order = self.orders[order_id]
+
+        if order.status not in (
+            OrderStatus.OPEN,
+            OrderStatus.PARTIALLY_FILLED
+        ):
+            raise ValueError("Order cannot be cancelled.")
+
+        order.status = OrderStatus.CANCELLED
+
+
+# ============================================================
+# PHYSICAL ASSETS
+# ============================================================
+
+@dataclass
+class Lot:
+    lot_id: str
+    asset: str
+    quantity: Decimal
+    unit: str
+    location: str
+    acquired_at: datetime = field(default_factory=now)
+
+    @property
+    def description(self) -> str:
+        return (
+            f"{self.quantity} {self.unit} "
+            f"{self.asset} @ {self.location}"
+        )
+
+
+@dataclass
+class Listing:
+    listing_id: str
+    lot_id: str
+    asset: str
+    quantity: Decimal
+    asking_price: Decimal
+    currency: str
+    active: bool = True
+
+
+@dataclass
+class Delivery:
+    delivery_id: str
+    lot_id: str
+    destination: str
+    quantity: Decimal
+    status: str = "PENDING"
+    created_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class PhysicalBook:
+    inventory: Dict[str, Decimal] = field(default_factory=dict)
+    lots: Dict[str, Lot] = field(default_factory=dict)
+    listings: Dict[str, Listing] = field(default_factory=dict)
+    deliveries: Dict[str, Delivery] = field(default_factory=dict)
+
+    def add_lot(
+        self,
+        asset: str,
+        quantity,
+        unit: str,
+        location: str
+    ) -> Lot:
+
+        quantity = money(quantity)
+
+        if quantity <= 0:
+            raise ValueError("Quantity must be positive.")
+
+        lot = Lot(
+            lot_id=new_id("lot"),
+            asset=asset.upper(),
+            quantity=quantity,
+            unit=unit,
+            location=location,
+        )
+
+        self.lots[lot.lot_id] = lot
+
+        self.inventory[lot.asset] = (
+            self.inventory.get(lot.asset, Decimal("0"))
+            + quantity
+        )
+
+        return lot
+
+    def create_listing(
+        self,
+        lot_id: str,
+        quantity,
+        asking_price,
+        currency: str
+    ) -> Listing:
+
+        if lot_id not in self.lots:
+            raise KeyError(f"Unknown lot: {lot_id}")
+
+        lot = self.lots[lot_id]
+        quantity = money(quantity)
+
+        if quantity <= 0 or quantity > lot.quantity:
+            raise ValueError("Invalid listing quantity.")
+
+        listing = Listing(
+            listing_id=new_id("lst"),
+            lot_id=lot_id,
+            asset=lot.asset,
+            quantity=quantity,
+            asking_price=money(asking_price),
+            currency=currency.upper(),
+        )
+
+        self.listings[listing.listing_id] = listing
+
+        return listing
+
+    def schedule_delivery(
+        self,
+        lot_id: str,
+        quantity,
+        destination: str
+    ) -> Delivery:
+
+        if lot_id not in self.lots:
+            raise KeyError(f"Unknown lot: {lot_id}")
+
+        lot = self.lots[lot_id]
+        quantity = money(quantity)
+
+        if quantity <= 0 or quantity > lot.quantity:
+            raise ValueError("Invalid delivery quantity.")
+
+        delivery = Delivery(
+            delivery_id=new_id("del"),
+            lot_id=lot_id,
+            destination=destination,
+            quantity=quantity,
+        )
+
+        self.deliveries[delivery.delivery_id] = delivery
+
+        return delivery
+
+
+# ============================================================
+# RISK
+# ============================================================
+
+@dataclass
+class TradingLimits:
+    max_order_notional: Decimal = Decimal("1000000")
+    max_position_notional: Decimal = Decimal("5000000")
+    max_daily_notional: Decimal = Decimal("10000000")
+
+
+@dataclass
+class RiskBook:
+    credit_limit: Decimal = Decimal("0")
+    trading_limits: TradingLimits = field(
+        default_factory=TradingLimits
+    )
+
+    asset_limits: Dict[str, Decimal] = field(default_factory=dict)
+
+    exposure: Dict[str, Decimal] = field(default_factory=dict)
+
+    def set_credit_limit(self, amount) -> None:
+        amount = money(amount)
+
+        if amount < 0:
+            raise ValueError("Credit limit cannot be negative.")
+
+        self.credit_limit = amount
+
+    def set_asset_limit(self, asset: str, limit) -> None:
+        limit = money(limit)
+
+        if limit < 0:
+            raise ValueError("Asset limit cannot be negative.")
+
+        self.asset_limits[asset.upper()] = limit
+
+    def update_exposure(self, asset: str, value) -> None:
+        self.exposure[asset.upper()] = money(value)
+
+    def check_order(
+        self,
+        symbol: str,
+        notional
+    ) -> bool:
+
+        symbol = symbol.upper()
+        notional = money(notional)
+
+        if notional > self.trading_limits.max_order_notional:
+            return False
+
+        asset_limit = self.asset_limits.get(symbol)
+
+        if asset_limit is not None:
+
+            current = self.exposure.get(
+                symbol,
+                Decimal("0")
+            )
+
+            if current + notional > asset_limit:
+                return False
+
+        return True
+
+    def risk_report(self) -> dict:
+        return {
+            "credit_limit": str(self.credit_limit),
+            "exposure": {
+                asset: str(value)
+                for asset, value in self.exposure.items()
+            },
+            "asset_limits": {
+                asset: str(value)
+                for asset, value in self.asset_limits.items()
+            },
+            "trading_limits": {
+                "max_order_notional":
+                    str(self.trading_limits.max_order_notional),
+                "max_position_notional":
+                    str(self.trading_limits.max_position_notional),
+                "max_daily_notional":
+                    str(self.trading_limits.max_daily_notional),
+            }
+        }
+
+
+# ============================================================
+# SETTLEMENT
+# ============================================================
+
+@dataclass
+class Settlement:
+    settlement_id: str
+    settlement_type: SettlementType
+    reference: str
+    amount: Decimal
+    currency_or_asset: str
+    status: str = "PENDING"
+    created_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class SettlementBook:
+    fiat: List[Settlement] = field(default_factory=list)
+    usdt: List[Settlement] = field(default_factory=list)
+    physical: List[Settlement] = field(default_factory=list)
+
+    def create(
+        self,
+        settlement_type: SettlementType,
+        reference: str,
+        amount,
+        currency_or_asset: str
+    ) -> Settlement:
+
+        settlement = Settlement(
+            settlement_id=new_id("stl"),
+            settlement_type=settlement_type,
+            reference=reference,
+            amount=money(amount),
+            currency_or_asset=currency_or_asset.upper(),
+        )
+
+        if settlement_type == SettlementType.FIAT:
+            self.fiat.append(settlement)
+
+        elif settlement_type == SettlementType.USDT:
+            self.usdt.append(settlement)
+
+        elif settlement_type == SettlementType.PHYSICAL:
+            self.physical.append(settlement)
+
+        return settlement
+
+    def complete(self, settlement_id: str) -> None:
+
+        books = (
+            self.fiat,
+            self.usdt,
+            self.physical
+        )
+
+        for book in books:
+
+            for settlement in book:
+
+                if settlement.settlement_id == settlement_id:
+                    settlement.status = "SETTLED"
+                    return
+
+        raise KeyError(
+            f"Unknown settlement: {settlement_id}"
+        )
+
+
+# ============================================================
+# AUDIT LOG
+# ============================================================
+
+@dataclass
+class AuditEvent:
+    event_id: str
+    event_type: str
+    actor: str
+    data: dict
+    timestamp: datetime = field(default_factory=now)
+
+
+# ============================================================
+# RHINOBANK ACCOUNT
+# ============================================================
+
+@dataclass
+class RhinoBankAccount:
+
+    identity: Identity
+
+    treasury: Treasury = field(
+        default_factory=Treasury
+    )
+
+    trading: TradingBook = field(
+        default_factory=TradingBook
+    )
+
+    physical: PhysicalBook = field(
+        default_factory=PhysicalBook
+    )
+
+    risk: RiskBook = field(
+        default_factory=RiskBook
+    )
+
+    settlement: SettlementBook = field(
+        default_factory=SettlementBook
+    )
+
+    audit_log: List[AuditEvent] = field(
+        default_factory=list
+    )
+
+    # --------------------------------------------------------
+    # AUDIT
+    # --------------------------------------------------------
+
+    def audit(
+        self,
+        event_type: str,
+        data: dict
+    ) -> None:
+
+        self.audit_log.append(
+            AuditEvent(
+                event_id=new_id("evt"),
+                event_type=event_type,
+                actor=self.identity.account_id,
+                data=data,
+            )
+        )
+
+    # --------------------------------------------------------
+    # TREASURY API
+    # --------------------------------------------------------
+
+    def deposit(self, currency: str, amount) -> None:
+
+        self.treasury.deposit(currency, amount)
+
+        self.audit(
+            "TREASURY_DEPOSIT",
+            {
+                "currency": currency,
+                "amount": str(amount),
+            }
+        )
+
+    # --------------------------------------------------------
+    # ORDER API
+    # --------------------------------------------------------
+
+    def place_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity,
+        price
+    ) -> Order:
+
+        quantity = money(quantity)
+        price = money(price)
+
+        notional = quantity * price
+
+        # Risk gateway
+        if not self.risk.check_order(
+            symbol,
+            notional
+        ):
+            raise PermissionError(
+                f"Risk limits rejected order "
+                f"for {symbol}."
+            )
+
+        order = self.trading.create_order(
+            symbol,
+            side,
+            quantity,
+            price
+        )
+
+        self.audit(
+            "ORDER_CREATED",
+            {
+                "order_id": order.order_id,
+                "symbol": symbol,
+                "side": side.value,
+                "quantity": str(quantity),
+                "price": str(price),
+                "notional": str(notional),
+            }
+        )
+
+        return order
+
+    def execute_order(
+        self,
+        order_id: str,
+        quantity,
+        price
+    ) -> Trade:
+
+        trade = self.trading.execute_order(
+            order_id,
+            quantity,
+            price
+        )
+
+        self.audit(
+            "TRADE_EXECUTED",
+            {
+                "trade_id": trade.trade_id,
+                "order_id": trade.order_id,
+                "symbol": trade.symbol,
+                "side": trade.side.value,
+                "quantity": str(trade.quantity),
+                "price": str(trade.price),
+            }
+        )
+
+        return trade
+
+    # --------------------------------------------------------
+    # PHYSICAL API
+    # --------------------------------------------------------
+
+    def acquire_physical(
+        self,
+        asset: str,
+        quantity,
+        unit: str,
+        location: str
+    ) -> Lot:
+
+        lot = self.physical.add_lot(
+            asset,
+            quantity,
+            unit,
+            location
+        )
+
+        self.audit(
+            "PHYSICAL_ACQUISITION",
+            {
+                "lot_id": lot.lot_id,
+                "asset": lot.asset,
+                "quantity": str(lot.quantity),
+                "unit": lot.unit,
+                "location": lot.location,
+            }
+        )
+
+        return lot
+
+    # --------------------------------------------------------
+    # SETTLEMENT API
+    # --------------------------------------------------------
+
+    def create_settlement(
+        self,
+        settlement_type: SettlementType,
+        reference: str,
+        amount,
+        asset: str
+    ) -> Settlement:
+
+        settlement = self.settlement.create(
+            settlement_type,
+            reference,
+            amount,
+            asset
+        )
+
+        self.audit(
+            "SETTLEMENT_CREATED",
+            {
+                "settlement_id": settlement.settlement_id,
+                "type": settlement_type.value,
+                "reference": reference,
+                "amount": str(amount),
+                "asset": asset,
+            }
+        )
+
+        return settlement
+
+    # --------------------------------------------------------
+    # ACCOUNT SNAPSHOT
+    # --------------------------------------------------------
+
+    def snapshot(self) -> dict:
+
+        return {
+            "identity": {
+                "account_id":
+                    self.identity.account_id,
+
+                "institutional_name":
+                    self.identity.institutional_name,
+
+                "role":
+                    self.identity.role.value,
+
+                "permissions":
+                    sorted(self.identity.permissions),
+            },
+
+            "treasury":
+                self.treasury.snapshot(),
+
+            "trading": {
+                "buying_power":
+                    str(self.trading.buying_power),
+
+                "open_orders": [
+                    {
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "side": order.side.value,
+                        "quantity": str(order.quantity),
+                        "filled": str(order.filled_quantity),
+                        "price": str(order.price),
+                        "status": order.status.value,
+                    }
+                    for order in self.trading.orders.values()
+                    if order.status in (
+                        OrderStatus.OPEN,
+                        OrderStatus.PARTIALLY_FILLED
+                    )
+                ],
+
+                "positions": {
+                    symbol: {
+                        "quantity":
+                            str(position.quantity),
+
+                        "average_price":
+                            str(position.average_price),
+                    }
+                    for symbol, position
+                    in self.trading.positions.items()
+                },
+
+                "trade_blotter": [
+                    {
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "side": trade.side.value,
+                        "quantity": str(trade.quantity),
+                        "price": str(trade.price),
+                        "notional": str(trade.notional),
+                    }
+                    for trade in self.trading.trade_blotter
+                ],
+            },
+
+            "physical": {
+                "inventory": {
+                    asset: str(quantity)
+                    for asset, quantity
+                    in self.physical.inventory.items()
+                },
+
+                "lots": {
+                    lot_id: {
+                        "asset": lot.asset,
+                        "quantity": str(lot.quantity),
+                        "unit": lot.unit,
+                        "location": lot.location,
+                    }
+                    for lot_id, lot
+                    in self.physical.lots.items()
+                },
+            },
+
+            "risk":
+                self.risk.risk_report(),
+
+            "settlement": {
+                "fiat":
+                    len(self.settlement.fiat),
+
+                "usdt":
+                    len(self.settlement.usdt),
+
+                "physical":
+                    len(self.settlement.physical),
+            },
+
+            "audit_events":
+                len(self.audit_log),
+        }
+
+
+# ============================================================
+# EXAMPLE RHINOBANK ACCOUNT
+# ============================================================
+
+if __name__ == "__main__":
+
+    # --------------------------------------------------------
+    # CREATE INSTITUTIONAL ACCOUNT
+    # --------------------------------------------------------
+
+    identity = Identity(
+        account_id="RHINO-INST-001",
+        institutional_name="RhinoBank Capital",
+        role=Role.ADMIN,
+        permissions={
+            "treasury.write",
+            "trading.write",
+            "physical.write",
+            "risk.write",
+            "settlement.write",
+        }
+    )
+
+    account = RhinoBankAccount(
+        identity=identity
+    )
+
+    # --------------------------------------------------------
+    # TREASURY
+    # --------------------------------------------------------
+
+    account.deposit("USD", "10000000")
+    account.deposit("GBP", "2500000")
+    account.deposit("EUR", "1800000")
+    account.deposit("USDT", "5000000")
+
+    account.trading.set_buying_power(
+        "5000000"
+    )
+
+    # --------------------------------------------------------
+    # RISK CONFIGURATION
+    # --------------------------------------------------------
+
+    account.risk.set_credit_limit(
+        "25000000"
+    )
+
+    account.risk.set_asset_limit(
+        "AAPL",
+        "2000000"
+    )
+
+    # --------------------------------------------------------
+    # TRADING
+    # --------------------------------------------------------
+
+    order = account.place_order(
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        quantity="5000",
+        price="180"
+    )
+
+    trade = account.execute_order(
+        order_id=order.order_id,
+        quantity="5000",
+        price="179.50"
+    )
+
+    # Update risk exposure
+    account.risk.update_exposure(
+        "AAPL",
+        trade.notional
+    )
+
+    # --------------------------------------------------------
+    # PHYSICAL ASSETS
+    # --------------------------------------------------------
+
+    gold_lot = account.acquire_physical(
+        asset="GOLD",
+        quantity="2500",
+        unit="kg",
+        location="London Vault"
+    )
+
+    silver_lot = account.acquire_physical(
+        asset="SILVER",
+        quantity="50000",
+        unit="kg",
+        location="Zurich Vault"
+    )
+
+    gold_listing = account.physical.create_listing(
+        lot_id=gold_lot.lot_id,
+        quantity="500",
+        asking_price="75000000",
+        currency="USD"
+    )
+
+    # --------------------------------------------------------
+    # PHYSICAL DELIVERY
+    # --------------------------------------------------------
+
+    delivery = account.physical.schedule_delivery(
+        lot_id=gold_lot.lot_id,
+        quantity="100",
+        destination="London"
+    )
+
+    # --------------------------------------------------------
+    # SETTLEMENT
+    # --------------------------------------------------------
+
+    fiat_settlement = account.create_settlement(
+        settlement_type=SettlementType.FIAT,
+        reference=trade.trade_id,
+        amount=trade.notional,
+        asset="USD"
+    )
+
+    usdt_settlement = account.create_settlement(
+        settlement_type=SettlementType.USDT,
+        reference="USDT-TXN-001",
+        amount="250000",
+        asset="USDT"
+    )
+
+    physical_settlement = account.create_settlement(
+        settlement_type=SettlementType.PHYSICAL,
+        reference=gold_listing.listing_id,
+        amount="500",
+        asset="GOLD"
+    )
+
+    # --------------------------------------------------------
+    # DISPLAY ACCOUNT
+    # --------------------------------------------------------
+
+    import pprint
+
+    pprint.pprint(
+        account.snapshot(),
+        sort_dicts=False
+    )
